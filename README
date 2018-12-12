@@ -1,0 +1,62 @@
+corrode
+=======
+
+Current release: 0.1.0-dev
+
+
+Description
+-----------
+
+Corrode is a bot rule generator for Apache configuration files. It
+generates rules from provided bot sources.
+
+Supported source groups are: `good`, `bad` and `ugly`:
+
+ - good - useful search engine bots
+ - bad - bots that crawl websites for unscrupulous reasons
+ - ugly - referral spammers
+
+Corrode is able to generate rules for `mod_env` and `mod_rewrite`.
+
+
+Installation
+------------
+
+Requirements:
+
+ - python
+ - python-requests
+ - python-lxml
+
+Installing:
+
+ - Copy `corrode` file to a directory in your `PATH`
+
+
+Documentation
+-------------
+
+    corrode --help
+
+
+Contributing
+------------
+
+Open an issue or send a pull request on the Github
+(http://github.com/loonies/corrode).
+
+
+Authors
+-------
+
+Maintainer:
+
+ - Miodrag Tokić
+
+
+Copyright
+---------
+
+Copyright (C) 2018 Miodrag Tokić.
+
+Released under the MIT License. See the LICENSE file for details.

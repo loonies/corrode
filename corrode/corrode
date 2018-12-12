@@ -1,0 +1,322 @@
+#!/usr/bin/env python
+
+import sys
+import logging
+import re
+import textwrap
+
+from datetime import datetime
+from argparse import ArgumentParser, FileType
+
+import requests
+
+from lxml import html, etree
+
+EXIT_SUCCESS = 0
+EXIT_EGENERAL = 1
+EXIT_EUSER = 2
+EXIT_EPARSER = 2
+
+LOG_LEVELS = {
+    'CRITICAL': logging.CRITICAL,
+    'ERROR': logging.ERROR,
+    'WARNING': logging.WARNING,
+    'INFO': logging.INFO,
+    'DEBUG': logging.DEBUG,
+}
+
+REQUEST_TIMEOUT = 10
+BOT_GROUPS = ['good', 'bad', 'ugly']
+MODULE_GROUPS = ['env', 'rewrite']
+
+URL_GOOD_1 = 'https://raw.githubusercontent.com/mitchellkrogza/apache-ultimate-bad-bot-blocker/master/_generator_lists/good-user-agents.list'
+URL_GOOD_2 = 'https://raw.githubusercontent.com/mitchellkrogza/apache-ultimate-bad-bot-blocker/master/_generator_lists/allowed-user-agents.list'
+URL_GOOD_3 = 'https://raw.githubusercontent.com/mitchellkrogza/apache-ultimate-bad-bot-blocker/master/_generator_lists/limited-user-agents.list'
+
+URL_BAD_1 = 'https://raw.githubusercontent.com/mitchellkrogza/apache-ultimate-bad-bot-blocker/master/_generator_lists/bad-user-agents.list'
+URL_BAD_2 = 'https://raw.githubusercontent.com/mitchellkrogza/apache-ultimate-bad-bot-blocker/master/_generator_lists/bad-user-agents-htaccess.list'
+
+URL_UGLY_1 = 'https://raw.githubusercontent.com/mitchellkrogza/apache-ultimate-bad-bot-blocker/master/_generator_lists/bad-referrers.list'
+URL_UGLY_2 = 'https://raw.githubusercontent.com/matomo-org/referrer-spam-blacklist/master/spammers.txt'
+
+IP_GOOD_1 = 'https://raw.githubusercontent.com/mitchellkrogza/apache-ultimate-bad-bot-blocker/master/_generator_lists/google-ip-ranges.list'
+IP_GOOD_2 = 'https://raw.githubusercontent.com/mitchellkrogza/apache-ultimate-bad-bot-blocker/master/_generator_lists/bing-ip-ranges.list'
+IP_GOOD_3 = 'https://raw.githubusercontent.com/mitchellkrogza/apache-ultimate-bad-bot-blocker/master/_generator_lists/cloudflare-ip-ranges.list'
+
+IP_BAD_1 = 'https://raw.githubusercontent.com/mitchellkrogza/apache-ultimate-bad-bot-blocker/master/_generator_lists/wordpress-theme-detectors-apache.list'
+IP_BAD_2 = 'https://raw.githubusercontent.com/mitchellkrogza/apache-ultimate-bad-bot-blocker/master/_generator_lists/nibbler-seo.list'
+
+def fetch(url):
+    try:
+        response = requests.get(url, timeout=REQUEST_TIMEOUT)
+        response.raise_for_status()
+        content = response.text
+        logging.debug('Content received')
+    except requests.exceptions.RequestException as err:
+        logging.error('Unable to fetch content: %s', err)
+        content = ''
+
+    return content
+
+class SourceProvider:
+    def __init__(self, bots):
+        self.bots = bots if bots is not None else BOT_GROUPS
+
+    def register(self, generator):
+        if 'good' in self.bots:
+            logging.info('Add source: good')
+            generator.add_source('good', URL_GOOD_1, TextParser())
+            generator.add_source('good', URL_GOOD_2, TextParser())
+            generator.add_source('good', URL_GOOD_3, TextParser())
+
+        if 'bad' in self.bots:
+            logging.info('Add source: bad')
+            generator.add_source('bad', URL_BAD_1, TextParser())
+            generator.add_source('bad', URL_BAD_2, TextParser())
+
+        if 'ugly' in self.bots:
+            logging.info('Add source: ugly')
+            generator.add_source('ugly', URL_UGLY_1, TextParser())
+            generator.add_source('ugly', URL_UGLY_2, TextParser())
+
+class FormatterProvider:
+    def __init__(self, module, bots):
+        self.module = module
+        self.bots = bots if bots is not None else BOT_GROUPS
+
+    def register(self, generator):
+        if self.module == 'rewrite':
+            if 'good' in self.bots:
+                logging.info('Add formatter for good: BotFormatter > RewriteCondUserAgentFormatter > RewriteCondFormatter')
+                generator.add_formatter('good', RewriteCondFormatter(RewriteCondUserAgentFormatter(BotFormatter())))
+
+            if 'bad' in self.bots:
+                logging.info('Add formatter for bad: BotFormatter > RewriteCondUserAgentFormatter > RewriteCondFormatter')
+                generator.add_formatter('bad', RewriteCondFormatter(RewriteCondUserAgentFormatter(BotFormatter())))
+
+            if 'ugly' in self.bots:
+                logging.info('Add Formatter for ugly: BotFormatter > RewriteCondRefererFormatter > RewriteCondFormatter')
+                generator.add_formatter('ugly', RewriteCondFormatter(RewriteCondRefererFormatter(BotFormatter())))
+
+        if self.module == 'env':
+            if 'good' in self.bots:
+                logging.info('Add Formatter for good: BotFormatter > SetEnvIfUserAgentFormatter > SetEnvIfFormatter')
+                generator.add_formatter('good', SetEnvIfFormatter(SetEnvIfUserAgentFormatter(BotFormatter())))
+
+            if 'bad' in self.bots:
+                logging.info('Add Formatter for bad: BotFormatter > SetEnvIfUserAgentFormatter > SetEnvIfFormatter')
+                generator.add_formatter('bad', SetEnvIfFormatter(SetEnvIfUserAgentFormatter(BotFormatter())))
+
+            if 'ugly' in self.bots:
+                logging.info('Add Formatter for ugly: BotFormatter > SetEnvIfRefererFormatter > SetEnvIfFormatter')
+                generator.add_formatter('ugly', SetEnvIfFormatter(SetEnvIfRefererFormatter(BotFormatter())))
+
+class WriterFactory:
+    def __init__(self, template):
+        self.template = template
+
+    def new_instance(self):
+        if self.template is not None:
+            return TemplateWriter(self.template)
+
+        return StdWriter()
+
+class Parser:
+    def parse(self, content):
+        raise NotImplementedError('Missing implementation')
+
+class TextParser(Parser):
+    def parse(self, content):
+        return content.splitlines()
+
+class HTMLParser(Parser):
+    def __init__(self, xpath):
+        self.xpath = xpath
+
+    def parse(self, content):
+        try:
+            tree = html.fromstring(content)
+        except etree.ParserError as err:
+            logging.error('Parsing error: %s', err)
+            # TODO raise ParserError and skip source in Generator
+            sys.exit(EXIT_EPARSER)
+
+        return tree.xpath(self.xpath)
+
+class Formatter:
+    def __init__(self, formatter=None):
+        self.formatter = formatter
+
+    def format(self, bot):
+        raise NotImplementedError('Missing implementation')
+
+class BotFormatter(Formatter):
+    # Match everything except: 'unicode alpha', 'numeric' and '\ '
+    REGEX_NON_ALPHANUM = r'([^\w\d\\ ]|_)'
+
+    def __init__(self, formatter=None):
+        self.non_alphanum = re.compile(self.REGEX_NON_ALPHANUM, re.UNICODE)
+        super().__init__(formatter)
+
+    def format(self, bot):
+        bot = re.sub(self.non_alphanum, r'\\\1', bot)
+        return bot
+
+class RewriteCondFormatter(Formatter):
+    def format(self, bot):
+        bot = self.formatter.format(bot)
+        bot = 'RewriteCond {} [NC,OR]'.format(bot)
+        return bot
+
+class RewriteCondUserAgentFormatter(Formatter):
+    def format(self, bot):
+        bot = self.formatter.format(bot)
+        bot = r'%{{HTTP_USER_AGENT}} \b{}\b'.format(bot)
+        return bot
+
+class RewriteCondRefererFormatter(Formatter):
+    def format(self, bot):
+        bot = self.formatter.format(bot)
+        bot = r'%{{HTTP_REFERER}} ^http(s)?://(www.)?.*{}.*$'.format(bot)
+        return bot
+
+class SetEnvIfFormatter(Formatter):
+    def format(self, bot):
+        bot = self.formatter.format(bot)
+        return 'SetEnvIfNoCase {} spambot=yes'.format(bot)
+
+class SetEnvIfUserAgentFormatter(Formatter):
+    def format(self, bot):
+        bot = self.formatter.format(bot)
+        bot = r'User-Agent \b{}\b'.format(bot)
+        return bot
+
+class SetEnvIfRefererFormatter(Formatter):
+    def format(self, bot):
+        bot = self.formatter.format(bot)
+        bot = 'Referer {}'.format(bot)
+        return bot
+
+class RobotsTxtFormatter(Formatter):
+    def format(self, bot):
+        # return 'Disallow: {}'.format(bot)
+        raise NotImplementedError('Formatter not implemented')
+
+class Writer:
+    def write(self, output):
+        raise NotImplementedError('Missing implementation')
+
+class StdWriter(Writer):
+    def write(self, output):
+        print('\n'.join(output))
+
+class TemplateWriter(Writer):
+    REPLSTR = '{{CORRODE}}'
+
+    def __init__(self, template):
+        self.template = template
+
+    def write(self, output):
+        template = self.template.read()
+        indent = self._get_indent(template)
+
+        output = '\n'.join(output)
+        output = textwrap.indent(output, indent)
+
+        content = template.replace(indent + self.REPLSTR, output)
+
+        print(content)
+
+    def _get_indent(self, content):
+        for line in content.splitlines():
+            if self.REPLSTR in line:
+                return line.replace(self.REPLSTR, '')
+
+        return ''
+
+class Generator:
+    def __init__(self, writer):
+        # Writer
+        self.writer = writer
+        # { group: [(url, Parser), ...], ... }
+        self.sources = {}
+        # { group: Formatter, ... }
+        self.formatters = {}
+        # { group: [bot, ...], ... }
+        self.bots = {}
+        # [ bot, ... ]
+        self.output = []
+
+    def add_source(self, group, url, parser):
+        if group not in self.sources:
+            self.sources[group] = []
+
+        self.sources[group].append((url, parser))
+
+    def add_formatter(self, group, formatter):
+        self.formatters[group] = formatter
+
+    def generate(self):
+        self._obtain_bots()
+        self._sort_bots()
+        self._process()
+        self.writer.write(self.output)
+
+    def _obtain_bots(self):
+        for group, sources in self.sources.items():
+            for source in sources:
+                url, parser = source
+
+                if group not in self.bots:
+                    self.bots[group] = set()
+
+                content = fetch(url)
+                bots = parser.parse(content)
+
+                # Merge into existing bot list, removing duplicates
+                self.bots[group] |= {*bots}
+
+    def _sort_bots(self):
+        self.bots = {group: sorted(bots) for group, bots in self.bots.items()}
+
+    def _process(self):
+        self._header()
+        for group, bots in self.bots.items():
+            self._title(group)
+            for bot in bots:
+                self.output.append(self.formatters[group].format(bot))
+
+    def _header(self):
+        self.output.append('### corrode - a bot killer')
+        self.output.append('### Date: {dt.day}. {dt:%b} {dt:%Y}'.format(dt=datetime.now()))
+
+        for group in self.bots.keys():
+            self.output.append('### {} bot count: {}'.format(group, len(self.bots[group])))
+
+    def _title(self, group):
+        self.output.append('')
+        self.output.append('### {} bots'.format(group))
+
+def main():
+    argparser = ArgumentParser(description='corrode - a bot killer')
+    argparser.add_argument('module', type=str, choices=MODULE_GROUPS, help='Apache module')
+    argparser.add_argument('-b', '--bot', type=str, choices=BOT_GROUPS, dest='bots', action='append', help='bot group')
+    argparser.add_argument('-d', '--debug', type=str, choices=LOG_LEVELS.keys(), default='ERROR', help='debug level')
+    argparser.add_argument('-t', '--template', type=FileType('r'), help='template file where "{{CORRODE}}" will be replaced by output')
+
+    args = argparser.parse_args()
+
+    logging.basicConfig(level=LOG_LEVELS[args.debug], format='%(levelname)s - %(message)s')
+
+    writer = WriterFactory(args.template).new_instance()
+    sources = SourceProvider(args.bots)
+    formatters = FormatterProvider(args.module, args.bots)
+    generator = Generator(writer)
+
+    sources.register(generator)
+    formatters.register(generator)
+
+    generator.generate()
+
+if __name__ == "__main__":
+    main()
