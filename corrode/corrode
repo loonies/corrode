@@ -213,7 +213,7 @@ class StdWriter(Writer):
         print('\n'.join(output))
 
 class TemplateWriter(Writer):
-    REPLSTR = '{{CORRODE}}'
+    REPLSTR = '# {{CORRODE}}'
 
     def __init__(self, template):
         self.template = template
