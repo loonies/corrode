@@ -30,7 +30,8 @@ Requirements:
 
 Installing:
 
- - Copy `corrode` file to a directory in your `PATH`
+ - Copy `corrode` file to a directory in your `PATH` and make
+   it executable.
 
 
 Documentation
