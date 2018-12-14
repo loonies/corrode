@@ -28,6 +28,7 @@ LOG_LEVELS = {
 REQUEST_TIMEOUT = 10
 BOT_GROUPS = ['good', 'bad', 'ugly']
 MODULE_GROUPS = ['env', 'rewrite']
+MOD_ENV_LABEL = 'corrode'
 
 URL_GOOD_1 = 'https://raw.githubusercontent.com/mitchellkrogza/apache-ultimate-bad-bot-blocker/master/_generator_lists/good-user-agents.list'
 URL_GOOD_2 = 'https://raw.githubusercontent.com/mitchellkrogza/apache-ultimate-bad-bot-blocker/master/_generator_lists/allowed-user-agents.list'
@@ -183,7 +184,8 @@ class RewriteCondRefererFormatter(Formatter):
 class SetEnvIfFormatter(Formatter):
     def format(self, bot):
         bot = self.formatter.format(bot)
-        return 'SetEnvIfNoCase {} spambot=yes'.format(bot)
+        bot = 'SetEnvIfNoCase {} {}=yes'.format(bot, MOD_ENV_LABEL)
+        return bot
 
 class SetEnvIfUserAgentFormatter(Formatter):
     def format(self, bot):
