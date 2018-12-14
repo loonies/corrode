@@ -128,6 +128,7 @@ class Parser:
 
 class TextParser(Parser):
     def parse(self, content):
+        content = content.replace(r'\ ', ' ')
         return content.splitlines()
 
 class HTMLParser(Parser):
@@ -152,11 +153,10 @@ class Formatter:
         raise NotImplementedError('Missing implementation')
 
 class BotFormatter(Formatter):
-    # Match everything except: 'unicode alpha', 'numeric' and '\ '
-    REGEX_NON_ALPHANUM = r'([^\w\d\\ ]|_)'
+    REGEX_NO_ESCAPE = r'([^\w\d ])'
 
     def __init__(self, formatter=None):
-        self.non_alphanum = re.compile(self.REGEX_NON_ALPHANUM, re.UNICODE)
+        self.non_alphanum = re.compile(self.REGEX_NO_ESCAPE, re.UNICODE)
         super().__init__(formatter)
 
     def format(self, bot):
