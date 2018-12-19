@@ -66,18 +66,18 @@ class SourceProvider:
     def register(self, generator):
         if 'good' in self.bots:
             logging.info('Add source: good')
-            generator.add_source('good', URL_GOOD_1, TextParser())
-            generator.add_source('good', URL_GOOD_2, TextParser())
-            generator.add_source('good', URL_GOOD_3, TextParser())
+            generator.add_source('good', URL_GOOD_1, TextParser('\\'))
+            generator.add_source('good', URL_GOOD_2, TextParser('\\'))
+            generator.add_source('good', URL_GOOD_3, TextParser('\\'))
 
         if 'bad' in self.bots:
             logging.info('Add source: bad')
-            generator.add_source('bad', URL_BAD_1, TextParser())
-            generator.add_source('bad', URL_BAD_2, TextParser())
+            generator.add_source('bad', URL_BAD_1, TextParser('\\'))
+            generator.add_source('bad', URL_BAD_2, TextParser('\\'))
 
         if 'ugly' in self.bots:
             logging.info('Add source: ugly')
-            generator.add_source('ugly', URL_UGLY_1, TextParser())
+            generator.add_source('ugly', URL_UGLY_1, TextParser('\\'))
             generator.add_source('ugly', URL_UGLY_2, TextParser())
 
 class FormatterProvider:
@@ -127,8 +127,18 @@ class Parser:
         raise NotImplementedError('Missing implementation')
 
 class TextParser(Parser):
+    def __init__(self, trim=None):
+        if trim is None:
+            trim = []
+        elif isinstance(trim, str):
+            trim = [trim]
+
+        self.trim = trim
+
     def parse(self, content):
-        content = content.replace(r'\ ', ' ')
+        for char in self.trim:
+            content = content.replace(char, '')
+
         return content.splitlines()
 
 class HTMLParser(Parser):
